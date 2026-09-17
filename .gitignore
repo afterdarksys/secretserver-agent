@@ -1,0 +1,12 @@
+/bin/
+/coverage.out
+*.test
+.DS_Store
+
+# Local credentials and runtime state
+.env
+.env.*
+identity.json
+.lock
+/state/
+/secrets/
