@@ -32,3 +32,11 @@ production OIDC provider/browser journey was not exercised. No physical TPM,
 Secure Enclave, HSM, or production account was used. Agent `key.sign` dispatch
 uses the existing signing service; actual hardware signing was not exercised by
 this integration run. The sample systemd unit was not installed or executed.
+
+## Named-variable extension
+
+The later named-variable implementation adds signed template/JSON resolution and
+`variable.resolve` profile grants. Live tests passed for assigned-variable access,
+unassigned-variable denial, and the separate agent CLI's JSON renderer. The final
+cross-platform feature review was approved with no outstanding findings. See
+[the variable guide](docs/VARIABLE_ASSIGNMENTS.md) for the shared contract.

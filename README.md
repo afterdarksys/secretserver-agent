@@ -142,7 +142,8 @@ bin/secretserver-agent run --output-dir /absolute/private/secrets --poll 30s
 
 `access` deliberately writes the service result, which may contain secrets, to
 stdout. Avoid capturing it in logs. `status` prints identity and grant metadata.
-The refresh loop writes `<alias>.json` with the secret's data fields, mode 0600,
+The refresh loop includes `secret.read` and `variable.resolve` grants and writes
+`<alias>.json` with the secret's data fields, mode 0600,
 using atomic per-file replacement. It never automatically issues database leases
 or performs signing; applications request those operations explicitly.
 
@@ -214,3 +215,10 @@ require an account or a running Secret Server.
 
 When reporting a problem, include the command, Go version, operating system, and
 redacted error output. Keep device identities, API keys, and secret values private.
+
+## Named secret variables
+
+Assign a name such as `LOG_SERVER_TX1_S` to a credential field and resolve
+`%%LOG_SERVER_TX1_S%%` through the shared server resolver. See the
+[variable assignment guide](docs/VARIABLE_ASSIGNMENTS.md) for APIs, SDK methods, Ansible lookup,
+Terraform ephemeral templates, CLI rendering, and agent grants.

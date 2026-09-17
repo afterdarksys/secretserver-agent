@@ -110,7 +110,7 @@ func (c *Client) Run(ctx context.Context, dir string, interval time.Duration, re
 			keep := map[string]bool{}
 			values := map[string][]byte{}
 			for _, grant := range identity.Grants {
-				if grant.Service != "secret.read" {
+				if grant.Service != "secret.read" && grant.Service != "variable.resolve" {
 					continue
 				}
 				raw, err := c.Access(ctx, grant.Alias, []byte("{}"))

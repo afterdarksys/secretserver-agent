@@ -231,7 +231,7 @@ func (c *Client) Identity(ctx context.Context) (Identity, error) {
 	}
 	seen := map[string]bool{}
 	for _, g := range id.Grants {
-		if !namePattern.MatchString(g.Alias) || seen[g.Alias] || !strings.Contains("|secret.read|key.sign|database.issue|", "|"+g.Service+"|") {
+		if !namePattern.MatchString(g.Alias) || seen[g.Alias] || !strings.Contains("|secret.read|key.sign|database.issue|variable.resolve|", "|"+g.Service+"|") {
 			return id, errors.New("invalid grant response")
 		}
 		seen[g.Alias] = true
@@ -243,4 +243,40 @@ func (c *Client) Access(ctx context.Context, alias string, payload []byte) ([]by
 		return nil, errors.New("invalid grant alias")
 	}
 	return c.do(ctx, "POST", "/api/v1/agent/access/"+alias, "", "application/json", payload, true)
+}
+
+// Render substitutes assigned variables without interpreting inserted values.
+func (c *Client) Render(ctx context.Context, template string) (string, error) {
+	body, err := json.Marshal(map[string]string{"template": template})
+	if err != nil {
+		return "", err
+	}
+	raw, err := c.do(ctx, "POST", "/api/v1/agent/variables/resolve", "", "application/json", body, true)
+	if err != nil {
+		return "", err
+	}
+	var result struct {
+		Rendered *string `json:"rendered"`
+	}
+	if json.Unmarshal(raw, &result) != nil || result.Rendered == nil {
+		return "", errors.New("invalid rendered response")
+	}
+	return *result.Rendered, nil
+}
+func (c *Client) ResolveDocument(ctx context.Context, document json.RawMessage) (json.RawMessage, error) {
+	body, err := json.Marshal(map[string]json.RawMessage{"document": document})
+	if err != nil {
+		return nil, errors.New("invalid JSON document")
+	}
+	raw, err := c.do(ctx, "POST", "/api/v1/agent/variables/resolve", "", "application/json", body, true)
+	if err != nil {
+		return nil, err
+	}
+	var result struct {
+		Document json.RawMessage `json:"document"`
+	}
+	if json.Unmarshal(raw, &result) != nil || len(result.Document) == 0 {
+		return nil, errors.New("invalid resolved document")
+	}
+	return result.Document, nil
 }

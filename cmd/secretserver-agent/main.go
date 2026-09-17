@@ -26,7 +26,7 @@ func main() {
 }
 func run(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: secretserver-agent login|status|access|run [options]")
+		return errors.New("usage: secretserver-agent login|status|access|render|run [options]")
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -109,7 +109,8 @@ func run(ctx context.Context, args []string) error {
 			return err
 		}
 		return json.NewEncoder(os.Stdout).Encode(identity)
-	case "status", "access", "run":
+	case "status", "access", "render", "run":
+		jsonDocument := f.Bool("json", false, "resolve JSON string values instead of raw text")
 		alias := f.String("alias", "", "assigned resource alias for access")
 		input := f.String("input", "", "JSON request file for access; '-' reads stdin")
 		output := f.String("output-dir", "", "dedicated private secret output directory for run")
@@ -150,6 +151,35 @@ func run(ctx context.Context, args []string) error {
 			}
 			return client.Run(ctx, out, *poll, func(err error) { fmt.Fprintln(os.Stderr, "refresh:", err) })
 		}
+		if args[0] == "render" {
+			var reader io.Reader = os.Stdin
+			if *input != "" && *input != "-" {
+				file, e := os.Open(*input)
+				if e != nil {
+					return errors.New("cannot open template")
+				}
+				defer file.Close()
+				reader = file
+			}
+			raw, e := io.ReadAll(io.LimitReader(reader, (1<<20)+1))
+			if e != nil || len(raw) > 1<<20 {
+				return errors.New("template exceeds size limit")
+			}
+			if *jsonDocument {
+				out, e := client.ResolveDocument(ctx, raw)
+				if e != nil {
+					return e
+				}
+				_, e = os.Stdout.Write(out)
+				return e
+			}
+			out, e := client.Render(ctx, string(raw))
+			if e != nil {
+				return e
+			}
+			_, e = io.WriteString(os.Stdout, out)
+			return e
+		}
 		body := []byte("{}")
 		if *input != "" {
 			var reader io.Reader = os.Stdin
@@ -174,6 +204,6 @@ func run(ctx context.Context, args []string) error {
 		_, err = os.Stdout.Write(append(raw, '\n'))
 		return err
 	default:
-		return errors.New("unknown command; use login, status, access, or run")
+		return errors.New("unknown command; use login, status, access, render, or run")
 	}
 }
