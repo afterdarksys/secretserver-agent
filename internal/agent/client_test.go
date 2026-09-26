@@ -105,8 +105,8 @@ func TestSignedIdentityAndRedirectRefusal(t *testing.T) {
 	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, server.URL, 302) }))
 	defer redirect.Close()
 	c.state.Server = redirect.URL
-	if _, err := c.Identity(context.Background()); err == nil {
-		t.Fatal("followed redirect")
+	if _, err := c.Identity(context.Background()); err == nil || !strings.Contains(err.Error(), "redirect refused") {
+		t.Fatal("followed redirect", err)
 	}
 }
 func TestRunClearsRevokedFiles(t *testing.T) {

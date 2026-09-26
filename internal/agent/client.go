@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -64,7 +65,10 @@ func NewClient(s State) (*Client, error) {
 	if !uuidPattern.MatchString(s.AccountID) || !uuidPattern.MatchString(s.ProfileID) || !namePattern.MatchString(s.Name) || (s.DeviceID != "" && !uuidPattern.MatchString(s.DeviceID)) {
 		return nil, errors.New("invalid identity fields")
 	}
-	return &Client{state: s, key: key, http: &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("redirect refused") }}}, nil
+	// Certificate-verified TLS 1.3 authenticates the server; redirects are never followed.
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS13}
+	return &Client{state: s, key: key, http: &http.Client{Transport: transport, Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("redirect refused") }}}, nil
 }
 func NewState(server, account, profile, name string, allowHTTP bool) (State, error) {
 	_, key, err := ed25519.GenerateKey(rand.Reader)
@@ -110,7 +114,12 @@ func (c *Client) do(ctx context.Context, method, path, token, contentType string
 	}
 	res, err := c.http.Do(req)
 	if err != nil {
-		return nil, errors.New("server connection failed")
+		// The URL error's cause (TLS, DNS, dial, redirect) carries no credentials.
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) {
+			err = urlErr.Err
+		}
+		return nil, fmt.Errorf("server connection failed: %v", err)
 	}
 	defer res.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(res.Body, (4<<20)+1))
