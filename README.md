@@ -149,7 +149,9 @@ or performs signing; applications request those operations explicitly.
 
 The output directory must be empty on first use and mode 0700. Afterwards it is
 marked as owned by this device. Treat the whole directory as agent-managed; do
-not store other JSON files there. A refresh failure removes delivered files;
+not store other JSON files there. It must not be, contain, or lie inside the
+state directory. Delivered aliases that differ only in letter case fail the
+refresh, because they would share one file on case-insensitive filesystems. A refresh failure removes delivered files;
 401/403 stops the agent. Other failures retry at the polling interval. Each full
 refresh is bounded to 30 seconds, so failure detection can take the polling
 interval plus 30 seconds. Files are removed on normal shutdown and on restart
@@ -181,7 +183,8 @@ Set `AGENT_VERIFICATION_URI=https://YOUR_WEB_HOST/agent/authorize` for self-host
 The default is `https://secretserver.io/agent/authorize`. Deploy the web approval
 page with its `NEXT_PUBLIC_API_URL` pointing at the same API.
 
-Use HTTPS and a trusted certificate. TLS termination must preserve the request
+Use HTTPS with TLS 1.3 and a certificate trusted by the host's system roots.
+The agent refuses TLS 1.2 and redirects. TLS termination must preserve the request
 path and query exactly. Production must not expose the upstream HTTP listener.
 Development allows HTTP only with `--allow-loopback-http` and a literal loopback
 IP. That flag is persisted with the identity; it is never a production fallback.
@@ -191,10 +194,33 @@ IP. That flag is persisted with the identity; it is never a production fallback.
 A Linux systemd unit is provided in
 [`deploy/secretserver-agent.service`](deploy/secretserver-agent.service). It uses
 a dedicated `secretserver-agent` user, `/var/lib/secretserver-agent` for identity,
-and `/run/secretserver-agent` for secret delivery. Before installing it, create
-the service account, install the binary at `/usr/local/bin/secretserver-agent`,
-and enroll using the service account and the unit's state directory. The unit
-is an example and is not installed automatically.
+and `/run/secretserver-agent` for secret delivery. The unit is an example and is
+not installed automatically. Install and enroll as root:
+
+```sh
+useradd --system --no-create-home --shell /usr/sbin/nologin secretserver-agent
+install -m 0755 bin/secretserver-agent /usr/local/bin/secretserver-agent
+install -d -m 0700 -o secretserver-agent -g secretserver-agent /var/lib/secretserver-agent
+# The enrollment key must be a 0600 file readable by the service account.
+install -d -m 0700 -o secretserver-agent -g secretserver-agent /run/secretserver-agent-enroll
+install -m 0600 -o secretserver-agent -g secretserver-agent /secure/enrollment-api-key /run/secretserver-agent-enroll/key
+runuser -u secretserver-agent -- /usr/local/bin/secretserver-agent login \
+  --server https://api.secretserver.io \
+  --account ACCOUNT_UUID --profile PROFILE_UUID --name web-01 \
+  --api-key-file /run/secretserver-agent-enroll/key \
+  --state-dir /var/lib/secretserver-agent
+rm -r /run/secretserver-agent-enroll
+install -m 0644 deploy/secretserver-agent.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now secretserver-agent
+```
+
+For OAuth enrollment, omit `--api-key-file` and the key steps. The unit runs with
+no capabilities, a read-only filesystem apart from its state and runtime
+directories, and a system-call filter. systemd removes `/run/secretserver-agent`
+whenever the service stops, including before an automatic restart. After device
+revocation the agent exits with status 1 and systemd retries every 15 seconds;
+run `systemctl disable --now secretserver-agent` on a decommissioned host.
 
 ## Development and verification
 
