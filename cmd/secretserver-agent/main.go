@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -19,21 +20,36 @@ import (
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := run(ctx, os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, "secretserver-agent:", err)
-		os.Exit(1)
-	}
+	os.Exit(exitCode(run(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr), os.Stderr))
 }
-func run(ctx context.Context, args []string) error {
+
+func exitCode(err error, stderr io.Writer) int {
+	if err == nil || errors.Is(err, flag.ErrHelp) {
+		return 0
+	}
+	fmt.Fprintln(stderr, "secretserver-agent:", err)
+	return 1
+}
+
+// within reports whether path is dir or lies beneath it.
+func within(path, dir string) bool {
+	rel, err := filepath.Rel(dir, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		return errors.New("usage: secretserver-agent login|status|access|render|run [options]")
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return err
+	// Without a home directory, --state-dir must be given explicitly.
+	defaultState := ""
+	if home, e := os.UserHomeDir(); e == nil {
+		defaultState = filepath.Join(home, ".config", "secretserver-agent")
 	}
+	var err error
 	f := flag.NewFlagSet(args[0], flag.ContinueOnError)
-	stateDir := f.String("state-dir", filepath.Join(home, ".config", "secretserver-agent"), "private device identity directory")
+	f.SetOutput(stderr)
+	stateDir := f.String("state-dir", defaultState, "private device identity directory")
 	switch args[0] {
 	case "login":
 		server := f.String("server", "https://api.secretserver.io", "Secret Server HTTPS origin")
@@ -86,7 +102,7 @@ func run(ctx context.Context, args []string) error {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(os.Stderr, "Open %s\nEnter code: %s\nConfirm device fingerprint: %s\n", auth.VerificationURI, auth.UserCode, client.Fingerprint())
+			fmt.Fprintf(stderr, "Open %s\nEnter code: %s\nConfirm device fingerprint: %s\n", auth.VerificationURI, auth.UserCode, client.Fingerprint())
 			token, err = client.WaitOAuth(ctx, auth)
 			if err != nil {
 				return err
@@ -108,7 +124,7 @@ func run(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		return json.NewEncoder(os.Stdout).Encode(identity)
+		return json.NewEncoder(stdout).Encode(identity)
 	case "status", "access", "render", "run":
 		jsonDocument := f.Bool("json", false, "resolve JSON string values instead of raw text")
 		alias := f.String("alias", "", "assigned resource alias for access")
@@ -134,7 +150,7 @@ func run(ctx context.Context, args []string) error {
 			if err != nil {
 				return err
 			}
-			return json.NewEncoder(os.Stdout).Encode(identity)
+			return json.NewEncoder(stdout).Encode(identity)
 		}
 		if args[0] == "run" {
 			// Never put delivered secrets in or above the directory holding the private key.
@@ -146,13 +162,27 @@ func run(ctx context.Context, args []string) error {
 			if err != nil {
 				return err
 			}
-			if out == statePath || filepath.Dir(statePath) == out {
+			// Resolve the deepest existing ancestor; the output directory may not exist yet.
+			resolved, rest := out, ""
+			for {
+				if r, e := filepath.EvalSymlinks(resolved); e == nil {
+					resolved = filepath.Join(r, rest)
+					break
+				}
+				parent := filepath.Dir(resolved)
+				if parent == resolved {
+					return errors.New("cannot resolve output-dir")
+				}
+				rest = filepath.Join(filepath.Base(resolved), rest)
+				resolved = parent
+			}
+			if within(statePath, resolved) || within(resolved, statePath) {
 				return errors.New("output-dir must be separate from state-dir")
 			}
-			return client.Run(ctx, out, *poll, func(err error) { fmt.Fprintln(os.Stderr, "refresh:", err) })
+			return client.Run(ctx, out, *poll, func(err error) { fmt.Fprintln(stderr, "refresh:", err) })
 		}
 		if args[0] == "render" {
-			var reader io.Reader = os.Stdin
+			reader := stdin
 			if *input != "" && *input != "-" {
 				file, e := os.Open(*input)
 				if e != nil {
@@ -170,19 +200,19 @@ func run(ctx context.Context, args []string) error {
 				if e != nil {
 					return e
 				}
-				_, e = os.Stdout.Write(out)
+				_, e = stdout.Write(out)
 				return e
 			}
 			out, e := client.Render(ctx, string(raw))
 			if e != nil {
 				return e
 			}
-			_, e = io.WriteString(os.Stdout, out)
+			_, e = io.WriteString(stdout, out)
 			return e
 		}
 		body := []byte("{}")
 		if *input != "" {
-			var reader io.Reader = os.Stdin
+			reader := stdin
 			var file *os.File
 			if *input != "-" {
 				file, err = os.Open(*input)
@@ -201,7 +231,7 @@ func run(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		_, err = os.Stdout.Write(append(raw, '\n'))
+		_, err = stdout.Write(append(raw, '\n'))
 		return err
 	default:
 		return errors.New("unknown command; use login, status, access, render, or run")
