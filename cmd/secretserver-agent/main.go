@@ -32,26 +32,45 @@ func exitCode(err error, stderr io.Writer) int {
 
 // beneath reports whether the existing directory path is dir or lies beneath
 // it. Symlinks are resolved and ancestors compared by file identity, so
-// case-insensitive spellings and alternate links cannot evade the check.
-func beneath(path, dir string) bool {
+// case-insensitive spellings and alternate links cannot evade the check. Any
+// error is returned so the caller refuses rather than treating it as "not beneath".
+func beneath(path, dir string) (bool, error) {
 	path, err := filepath.EvalSymlinks(path)
 	if err != nil {
-		return false
+		return false, err
 	}
 	target, err := os.Stat(dir)
 	if err != nil {
-		return false
+		return false, err
 	}
 	for {
-		if st, e := os.Stat(path); e == nil && os.SameFile(st, target) {
-			return true
+		st, err := os.Stat(path)
+		if err != nil {
+			return false, err
+		}
+		if os.SameFile(st, target) {
+			return true, nil
 		}
 		parent := filepath.Dir(path)
 		if parent == path {
-			return false
+			return false, nil
 		}
 		path = parent
 	}
+}
+
+// separate reports whether the output directory (via its deepest existing
+// ancestor) and the state directory are disjoint in both directions.
+func separate(existing, out, stateDir string) bool {
+	if in, err := beneath(existing, stateDir); err != nil || in {
+		return false
+	}
+	if existing == out {
+		if in, err := beneath(stateDir, out); err != nil || in {
+			return false
+		}
+	}
+	return true
 }
 
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
@@ -190,7 +209,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 				}
 				existing = parent
 			}
-			if beneath(existing, *stateDir) || (existing == out && beneath(*stateDir, out)) {
+			if !separate(existing, out, *stateDir) {
 				return errors.New("output-dir must be separate from state-dir")
 			}
 			return client.Run(ctx, out, *poll, func(err error) { fmt.Fprintln(stderr, "refresh:", err) })
