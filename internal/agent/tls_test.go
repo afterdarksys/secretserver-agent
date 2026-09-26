@@ -45,7 +45,7 @@ func TestTLSPolicy(t *testing.T) {
 	if _, err := tlsClient(t, tls.VersionTLS13, false); err == nil || !strings.Contains(err.Error(), "certificate") {
 		t.Fatalf("untrusted certificate accepted or undiagnosed: %v", err)
 	}
-	if _, err := tlsClient(t, tls.VersionTLS12, true); err == nil {
-		t.Fatal("TLS 1.2 server accepted")
+	if _, err := tlsClient(t, tls.VersionTLS12, true); err == nil || !strings.Contains(err.Error(), "protocol version") {
+		t.Fatalf("TLS 1.2 server accepted or rejected for another reason: %v", err)
 	}
 }

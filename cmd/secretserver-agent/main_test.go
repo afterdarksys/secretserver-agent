@@ -134,14 +134,17 @@ func TestLoginValidation(t *testing.T) {
 		"implicit-http":   append([]string{"login", "--server", server.URL, "--state-dir", privateDir(t, "b")}, base...),
 		"server-path":     append([]string{"login", "--server", "https://example.com/api", "--state-dir", privateDir(t, "c")}, base...),
 		"missing-account": {"login", "--server", "https://example.com", "--profile", profile, "--name", "x", "--state-dir", privateDir(t, "d")},
-		"uppercase-uuid":  {"login", "--server", "https://example.com", "--account", strings.ToUpper(account), "--profile", profile, "--name", "x", "--state-dir", privateDir(t, "e")},
+		"uppercase-uuid":  {"login", "--server", server.URL, "--allow-loopback-http", "--account", "AAAAAAAA-1111-4111-8111-111111111111", "--profile", profile, "--name", "x", "--state-dir", privateDir(t, "e")},
 		"bad-name":        {"login", "--server", "https://example.com", "--account", account, "--profile", profile, "--name", "-x", "--state-dir", privateDir(t, "f")},
 		"public-key-file": append([]string{"login", "--server", server.URL, "--allow-loopback-http", "--api-key-file", key, "--state-dir", privateDir(t, "g")}, base...),
 		"relative-state":  append([]string{"login", "--server", server.URL, "--allow-loopback-http", "--state-dir", "state"}, base...),
 	}
 	for name, args := range cases {
+		// Every case must be refused locally, before any request is sent.
 		if _, _, err := invoke(args...); err == nil {
 			t.Errorf("%s accepted", name)
+		} else if strings.Contains(err.Error(), "server request failed") || strings.Contains(err.Error(), "server connection failed") {
+			t.Errorf("%s reached the server instead of failing validation: %v", name, err)
 		}
 	}
 }

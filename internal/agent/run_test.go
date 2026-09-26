@@ -168,7 +168,10 @@ func TestRunFailsClosedOnInvalidDelivery(t *testing.T) {
 			done := make(chan error, 1)
 			go func() { done <- c.Run(ctx, dir, time.Second, func(err error) { reported <- err }) }()
 			select {
-			case <-reported:
+			case err := <-reported:
+				if name == "case-collision" && !strings.Contains(err.Error(), "collide ignoring case") {
+					t.Fatalf("case collision refused for another reason: %v", err)
+				}
 			case <-time.After(10 * time.Second):
 				t.Fatal("invalid delivery not reported")
 			}
