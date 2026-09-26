@@ -109,10 +109,16 @@ func (c *Client) Run(ctx context.Context, dir string, interval time.Duration, re
 			}
 			keep := map[string]bool{}
 			values := map[string][]byte{}
+			folded := map[string]bool{}
 			for _, grant := range identity.Grants {
 				if grant.Service != "secret.read" && grant.Service != "variable.resolve" {
 					continue
 				}
+				// Aliases differing only in case share one file on case-insensitive filesystems.
+				if folded[strings.ToLower(grant.Alias)] {
+					return errors.New("delivered aliases collide ignoring case")
+				}
+				folded[strings.ToLower(grant.Alias)] = true
 				raw, err := c.Access(ctx, grant.Alias, []byte("{}"))
 				if err != nil {
 					return err

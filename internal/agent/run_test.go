@@ -155,6 +155,8 @@ func TestRunFailsClosedOnInvalidDelivery(t *testing.T) {
 		"non-string-values": {[]Grant{{Alias: "app", Service: "secret.read"}}, map[string]string{"app": `{"data":{"k":1}}`}},
 		"missing-data":      {[]Grant{{Alias: "app", Service: "secret.read"}}, map[string]string{"app": `{"value":"v"}`}},
 		"not-json":          {[]Grant{{Alias: "app", Service: "secret.read"}}, map[string]string{"app": `v`}},
+		// On case-insensitive filesystems these aliases name the same file.
+		"case-collision": {[]Grant{{Alias: "DB", Service: "secret.read"}, {Alias: "db", Service: "secret.read"}}, map[string]string{"DB": `{"data":{"k":"upper"}}`, "db": `{"data":{"k":"lower"}}`}},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
