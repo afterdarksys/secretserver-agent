@@ -15,6 +15,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -172,6 +173,8 @@ type DeviceAuthorization struct {
 	Interval        int    `json:"interval"`
 }
 
+var userCodePattern = regexp.MustCompile(`^[A-Za-z0-9-]{4,64}$`)
+
 func (c *Client) StartOAuth(ctx context.Context) (DeviceAuthorization, error) {
 	values := url.Values{"client_id": {"secretserver-agent"}}
 	for k, v := range c.Enrollment() {
@@ -185,8 +188,12 @@ func (c *Client) StartOAuth(ctx context.Context) (DeviceAuthorization, error) {
 	if json.Unmarshal(raw, &d) != nil || d.DeviceCode == "" || d.UserCode == "" || d.ExpiresIn < 1 || d.ExpiresIn > 600 || d.Interval < 5 || d.Interval > 60 {
 		return d, errors.New("invalid device authorization response")
 	}
+	// Both values are printed to the operator's terminal; allow no control or escape sequences.
+	if !userCodePattern.MatchString(d.UserCode) {
+		return d, errors.New("invalid device authorization response")
+	}
 	u, err := url.Parse(d.VerificationURI)
-	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil {
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || strings.IndexFunc(d.VerificationURI, func(r rune) bool { return r < 0x21 || r > 0x7e }) >= 0 {
 		return d, errors.New("invalid authorization URL")
 	}
 	return d, nil

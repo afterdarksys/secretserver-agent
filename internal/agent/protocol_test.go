@@ -324,6 +324,9 @@ func TestOAuthRejectsUnsafeResponses(t *testing.T) {
 		"userinfo-uri":  `{"device_code":"dc","user_code":"ABCD1234","verification_uri":"https://a@evil.example/","expires_in":600,"interval":5}`,
 		"fast-interval": `{"device_code":"dc","user_code":"ABCD1234","verification_uri":"https://ok.example/","expires_in":600,"interval":1}`,
 		"long-expiry":   `{"device_code":"dc","user_code":"ABCD1234","verification_uri":"https://ok.example/","expires_in":86400,"interval":5}`,
+		"escape-code":   `{"device_code":"dc","user_code":"\u001b]0;pwned\u0007","verification_uri":"https://ok.example/","expires_in":600,"interval":5}`,
+		"newline-code":  `{"device_code":"dc","user_code":"AB\nCD","verification_uri":"https://ok.example/","expires_in":600,"interval":5}`,
+		"unicode-uri":   `{"device_code":"dc","user_code":"ABCD1234","verification_uri":"https://ok.example/\u202eevil","expires_in":600,"interval":5}`,
 		"empty-code":    `{"device_code":"","user_code":"ABCD1234","verification_uri":"https://ok.example/","expires_in":600,"interval":5}`,
 	}
 	for name, body := range start {
