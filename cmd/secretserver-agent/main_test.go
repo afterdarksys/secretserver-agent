@@ -213,14 +213,21 @@ func TestRunOutputMustBeSeparateFromState(t *testing.T) {
 	os.Symlink(state, link)
 	linkParent := filepath.Join(t.TempDir(), "parent")
 	os.Symlink(filepath.Dir(state), linkParent)
-	for name, out := range map[string]string{
+	cases := map[string]string{
 		"same":           state,
 		"parent":         filepath.Dir(state),
 		"grandparent":    filepath.Dir(filepath.Dir(state)),
 		"inside":         filepath.Join(state, "secrets"),
 		"symlink":        link,
 		"symlink-parent": filepath.Join(linkParent, "state"),
-	} {
+	}
+	upper := filepath.Join(filepath.Dir(state), "STATE")
+	if _, err := os.Stat(upper); err == nil {
+		// Case-insensitive filesystem (default macOS): alternate spellings alias the state dir.
+		cases["case-same"] = upper
+		cases["case-inside"] = filepath.Join(upper, "secrets")
+	}
+	for name, out := range cases {
 		if _, _, err := invoke("run", "--state-dir", state, "--output-dir", out); err == nil || !strings.Contains(err.Error(), "separate") {
 			t.Errorf("%s: output-dir %s accepted: %v", name, out, err)
 		}

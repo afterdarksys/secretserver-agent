@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
@@ -31,10 +30,28 @@ func exitCode(err error, stderr io.Writer) int {
 	return 1
 }
 
-// within reports whether path is dir or lies beneath it.
-func within(path, dir string) bool {
-	rel, err := filepath.Rel(dir, path)
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+// beneath reports whether the existing directory path is dir or lies beneath
+// it. Symlinks are resolved and ancestors compared by file identity, so
+// case-insensitive spellings and alternate links cannot evade the check.
+func beneath(path, dir string) bool {
+	path, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return false
+	}
+	target, err := os.Stat(dir)
+	if err != nil {
+		return false
+	}
+	for {
+		if st, e := os.Stat(path); e == nil && os.SameFile(st, target) {
+			return true
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			return false
+		}
+		path = parent
+	}
 }
 
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
@@ -158,25 +175,22 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			if err != nil || *output == "" {
 				return errors.New("output-dir is required")
 			}
-			statePath, err := filepath.EvalSymlinks(*stateDir)
-			if err != nil {
-				return err
+			if _, err = os.Stat(*stateDir); err != nil {
+				return errors.New("cannot inspect state-dir")
 			}
-			// Resolve the deepest existing ancestor; the output directory may not exist yet.
-			resolved, rest := out, ""
+			// The output directory may not exist yet: check its deepest existing ancestor.
+			existing := out
 			for {
-				if r, e := filepath.EvalSymlinks(resolved); e == nil {
-					resolved = filepath.Join(r, rest)
+				if _, e := os.Stat(existing); e == nil {
 					break
 				}
-				parent := filepath.Dir(resolved)
-				if parent == resolved {
+				parent := filepath.Dir(existing)
+				if parent == existing {
 					return errors.New("cannot resolve output-dir")
 				}
-				rest = filepath.Join(filepath.Base(resolved), rest)
-				resolved = parent
+				existing = parent
 			}
-			if within(statePath, resolved) || within(resolved, statePath) {
+			if beneath(existing, *stateDir) || (existing == out && beneath(*stateDir, out)) {
 				return errors.New("output-dir must be separate from state-dir")
 			}
 			return client.Run(ctx, out, *poll, func(err error) { fmt.Fprintln(stderr, "refresh:", err) })
