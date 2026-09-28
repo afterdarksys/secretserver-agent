@@ -248,3 +248,15 @@ Assign a name such as `LOG_SERVER_TX1_S` to a credential field and resolve
 `%%LOG_SERVER_TX1_S%%` through the shared server resolver. See the
 [variable assignment guide](docs/VARIABLE_ASSIGNMENTS.md) for APIs, SDK methods, Ansible lookup,
 Terraform ephemeral templates, CLI rendering, and agent grants.
+
+
+## Protected documents and DarkStorage
+
+Protected PDFs are managed at https://secretserver.io/documents (or your self-hosted
+web console). The device agent does not accept document grants, fetch PDFs, cache
+previews, or enforce browser print controls. Its existing service allowlist rejects
+unknown document services before the refresh loop can deliver them to disk.
+Use the web console for recipient access and the Secret Server SDKs or
+`darkstorage protected` CLI with a separately scoped management API key for automation.
+Do not put document management keys into agent profiles to bypass this separation.
+No agent protocol or service deployment change is required for this integration.

@@ -157,3 +157,22 @@ func TestRunRejectsForeignDirectory(t *testing.T) {
 		t.Fatal("foreign file removed")
 	}
 }
+
+func TestDocumentGrantRejectedByDeviceIdentity(t *testing.T) {
+	for _, service := range []string{"document.read", "documents:manage", "document.preview", "document.download"} {
+		t.Run(service, func(t *testing.T) {
+			state, _ := NewState("https://example.com", testAccount, testProfile, "test", false)
+			state.DeviceID = testDevice
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				json.NewEncoder(w).Encode(Identity{DeviceID: testDevice, AccountID: testAccount, ProfileID: testProfile, Grants: []Grant{{Alias: "private-pdf", Service: service, Resource: testDevice}}})
+			}))
+			defer server.Close()
+			state.Server = server.URL
+			state.AllowHTTP = true
+			c, _ := NewClient(state)
+			if _, err := c.Identity(context.Background()); err == nil {
+				t.Fatal("accepted unsupported document grant")
+			}
+		})
+	}
+}
