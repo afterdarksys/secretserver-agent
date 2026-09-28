@@ -10,3 +10,6 @@ identity.json
 .lock
 /state/
 /secrets/
+
+# Local agent tooling state
+.omc/
