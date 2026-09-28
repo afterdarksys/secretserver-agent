@@ -14,12 +14,18 @@ import (
 	"time"
 
 	"github.com/afterdarksys/secretserver-agent/internal/agent"
+	"github.com/afterdarksys/secretserver-agent/internal/securemem"
 )
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	os.Exit(exitCode(run(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr), os.Stderr))
+	code := exitCode(run(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr), os.Stderr)
+	if err := securemem.Purge(); err != nil {
+		code = 1
+	}
+	stop()
+	os.Exit(code)
 }
 
 func exitCode(err error, stderr io.Writer) int {
@@ -131,6 +137,8 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		if err != nil {
 			return err
 		}
+		defer client.Close()
+		state.PrivateKey = ""
 		var token string
 		oauth := *tokenFile == ""
 		if oauth {
@@ -181,6 +189,8 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		if err != nil {
 			return err
 		}
+		defer client.Close()
+		state.PrivateKey = ""
 		if args[0] == "status" {
 			identity, err := client.Identity(ctx)
 			if err != nil {

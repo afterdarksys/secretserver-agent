@@ -176,3 +176,37 @@ func TestDocumentGrantRejectedByDeviceIdentity(t *testing.T) {
 		})
 	}
 }
+
+func TestClientProtectedKeyLifecycle(t *testing.T) {
+	state, err := NewState("https://example.com", testAccount, testProfile, "test", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := NewClient(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.state.PrivateKey != "" {
+		t.Fatal("client retained encoded private key")
+	}
+	proof := c.Enrollment()
+	pub, _ := base64.RawURLEncoding.DecodeString(proof["public_key"])
+	sig, _ := base64.RawURLEncoding.DecodeString(proof["signature"])
+	msg := []byte("secretserver-enroll-v1\n" + testAccount + "\n" + testProfile + "\ntest\n" + proof["public_key"])
+	if !ed25519.Verify(pub, msg, sig) {
+		t.Fatal("protected signing failed")
+	}
+	if err = c.Close(); err != nil {
+		t.Fatal(err)
+	}
+	c.Close()
+	if _, err = c.StartOAuth(context.Background()); err == nil {
+		t.Fatal("closed key used for OAuth")
+	}
+	if _, err = c.Identity(context.Background()); err == nil {
+		t.Fatal("closed key used for identity")
+	}
+	if c.Enrollment() != nil {
+		t.Fatal("closed key returned proof")
+	}
+}

@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/afterdarksys/secretserver-agent/internal/securemem"
 	"io"
 	"net/http"
 	"net/url"
@@ -22,9 +23,10 @@ import (
 )
 
 type Client struct {
-	state State
-	key   ed25519.PrivateKey
-	http  *http.Client
+	state  State
+	key    *securemem.Buffer
+	public ed25519.PublicKey
+	http   *http.Client
 }
 type Grant struct {
 	Alias    string `json:"alias"`
@@ -60,37 +62,78 @@ func NewClient(s State) (*Client, error) {
 	}
 	s.Server = server
 	key, err := base64.RawURLEncoding.DecodeString(s.PrivateKey)
-	if err != nil || len(key) != 64 || !bytes.Equal(ed25519.NewKeyFromSeed(key[:32]), key) {
+	defer clear(key)
+	if err != nil || len(key) != 64 {
+		return nil, errors.New("invalid device private key")
+	}
+	expected := ed25519.NewKeyFromSeed(key[:32])
+	defer clear(expected)
+	if !bytes.Equal(expected, key) {
 		return nil, errors.New("invalid device private key")
 	}
 	if !uuidPattern.MatchString(s.AccountID) || !uuidPattern.MatchString(s.ProfileID) || !namePattern.MatchString(s.Name) || (s.DeviceID != "" && !uuidPattern.MatchString(s.DeviceID)) {
 		return nil, errors.New("invalid identity fields")
 	}
+	public := append(ed25519.PublicKey(nil), key[32:]...)
+	protectedKey, err := securemem.Consume(key)
+	if err != nil {
+		return nil, err
+	}
+	s.PrivateKey = "" // Do not retain the serialized private key in the long-lived client.
 	// Certificate-verified TLS 1.3 authenticates the server; redirects are never followed.
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS13}
-	return &Client{state: s, key: key, http: &http.Client{Transport: transport, Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("redirect refused") }}}, nil
+	return &Client{state: s, key: protectedKey, public: public, http: &http.Client{Transport: transport, Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("redirect refused") }}}, nil
 }
 func NewState(server, account, profile, name string, allowHTTP bool) (State, error) {
 	_, key, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return State{}, err
 	}
+	defer clear(key)
 	s := State{Server: server, AccountID: account, ProfileID: profile, Name: name, AllowHTTP: allowHTTP, PrivateKey: base64.RawURLEncoding.EncodeToString(key)}
-	_, err = NewClient(s)
+	probe, err := NewClient(s)
+	if err == nil {
+		probe.Close()
+	}
 	return s, err
 }
-func (c *Client) Enrollment() map[string]string {
-	pub := base64.RawURLEncoding.EncodeToString(c.key.Public().(ed25519.PublicKey))
-	msg := []byte("secretserver-enroll-v1\n" + c.state.AccountID + "\n" + c.state.ProfileID + "\n" + c.state.Name + "\n" + pub)
-	return map[string]string{"account_id": c.state.AccountID, "profile_id": c.state.ProfileID, "name": c.state.Name, "public_key": pub, "signature": base64.RawURLEncoding.EncodeToString(ed25519.Sign(c.key, msg))}
+
+// Close invalidates the signing key. Previously returned State values are caller-owned.
+func (c *Client) Close() error { c.http.CloseIdleConnections(); return c.key.Destroy() }
+func (c *Client) sign(message []byte) (signature []byte, err error) {
+	err = c.key.WithBytes(func(key []byte) error { // Go's Ed25519 implementation weak-caches heap key pointers. An mmap
+		// pointer is invalid there. Bound and wipe our required heap bridge;
+		// internal expanded-key/cache copies remain outside this guarantee.
+		temporary := append(ed25519.PrivateKey(nil), key...)
+		defer clear(temporary)
+		signature = ed25519.Sign(temporary, message)
+		return nil
+	})
+	return
 }
+func (c *Client) enrollment() (map[string]string, error) {
+	pub := base64.RawURLEncoding.EncodeToString(c.public)
+	msg := []byte("secretserver-enroll-v1\n" + c.state.AccountID + "\n" + c.state.ProfileID + "\n" + c.state.Name + "\n" + pub)
+	sig, err := c.sign(msg)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]string{"account_id": c.state.AccountID, "profile_id": c.state.ProfileID, "name": c.state.Name, "public_key": pub, "signature": base64.RawURLEncoding.EncodeToString(sig)}, nil
+}
+
+// Enrollment retains the original public API; unavailable keys produce no proof.
+// Transport methods use enrollment() to propagate errors before sending a request.
+func (c *Client) Enrollment() map[string]string { proof, _ := c.enrollment(); return proof }
 func (c *Client) Fingerprint() string {
-	pub := c.Enrollment()["public_key"]
+	pub := base64.RawURLEncoding.EncodeToString(c.public)
 	sum := sha256.Sum256([]byte(pub))
 	return hex.EncodeToString(sum[:])
 }
 func (c *Client) do(ctx context.Context, method, path, token, contentType string, body []byte, proof bool) ([]byte, error) {
+	if c.key.Len() == 0 {
+		return nil, securemem.ErrDestroyed
+	}
 	req, err := http.NewRequestWithContext(ctx, method, c.state.Server+path, bytes.NewReader(body))
 	if err != nil {
 		return nil, errors.New("cannot create request")
@@ -111,7 +154,11 @@ func (c *Client) do(ctx context.Context, method, path, token, contentType string
 		req.Header.Set("X-SecretServer-Device", c.state.DeviceID)
 		req.Header.Set("X-SecretServer-Time", ts)
 		req.Header.Set("X-SecretServer-Nonce", nonce)
-		req.Header.Set("X-SecretServer-Signature", base64.RawURLEncoding.EncodeToString(ed25519.Sign(c.key, msg)))
+		signature, err := c.sign(msg)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("X-SecretServer-Signature", base64.RawURLEncoding.EncodeToString(signature))
 	}
 	res, err := c.http.Do(req)
 	if err != nil {
@@ -147,7 +194,11 @@ func (c *Client) Enroll(ctx context.Context, token string, oauth bool) (State, e
 	if oauth {
 		path = "/api/v1/agent/oauth/enroll"
 	}
-	data, _ := json.Marshal(c.Enrollment())
+	proof, err := c.enrollment()
+	if err != nil {
+		return c.state, err
+	}
+	data, _ := json.Marshal(proof)
 	raw, err := c.do(ctx, "POST", path, token, "application/json", data, false)
 	if err != nil {
 		return c.state, err
@@ -158,11 +209,14 @@ func (c *Client) Enroll(ctx context.Context, token string, oauth bool) (State, e
 		ProfileID string `json:"profile_id"`
 		PublicKey string `json:"public_key"`
 	}
-	if json.Unmarshal(raw, &got) != nil || got.AccountID != c.state.AccountID || got.ProfileID != c.state.ProfileID || got.PublicKey != c.Enrollment()["public_key"] || !uuidPattern.MatchString(got.DeviceID) {
+	if json.Unmarshal(raw, &got) != nil || got.AccountID != c.state.AccountID || got.ProfileID != c.state.ProfileID || got.PublicKey != base64.RawURLEncoding.EncodeToString(c.public) || !uuidPattern.MatchString(got.DeviceID) {
 		return c.state, errors.New("server enrollment binding mismatch")
 	}
 	c.state.DeviceID = got.DeviceID
-	return c.state, nil
+	// Only enrollment persistence needs a serialized key; never retain it on Client.
+	result := c.state
+	err = c.key.WithBytes(func(key []byte) error { result.PrivateKey = base64.RawURLEncoding.EncodeToString(key); return nil })
+	return result, err
 }
 
 type DeviceAuthorization struct {
@@ -177,7 +231,11 @@ var userCodePattern = regexp.MustCompile(`^[A-Za-z0-9-]{4,64}$`)
 
 func (c *Client) StartOAuth(ctx context.Context) (DeviceAuthorization, error) {
 	values := url.Values{"client_id": {"secretserver-agent"}}
-	for k, v := range c.Enrollment() {
+	proof, err := c.enrollment()
+	if err != nil {
+		return DeviceAuthorization{}, err
+	}
+	for k, v := range proof {
 		values.Set(k, v)
 	}
 	raw, err := c.do(ctx, "POST", "/api/v1/agent/oauth/device", "", "application/x-www-form-urlencoded", []byte(values.Encode()), false)

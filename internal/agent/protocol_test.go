@@ -65,7 +65,7 @@ func enrolledClient(t *testing.T, handler http.HandlerFunc) (*Client, ed25519.Pu
 	if err != nil {
 		t.Fatal(err)
 	}
-	return c, c.key.Public().(ed25519.PublicKey)
+	return c, c.public
 }
 
 func TestRequestProofMatchesServerContract(t *testing.T) {

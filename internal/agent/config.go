@@ -104,6 +104,7 @@ func SaveState(dir string, s State) error {
 	}
 	defer r.Close()
 	raw, err := json.MarshalIndent(s, "", "  ")
+	defer clear(raw)
 	if err != nil {
 		return err
 	}

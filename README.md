@@ -260,3 +260,13 @@ Use the web console for recipient access and the Secret Server SDKs or
 `darkstorage protected` CLI with a separately scoped management API key for automation.
 Do not put document management keys into agent profiles to bypass this separation.
 No agent protocol or service deployment change is required for this integration.
+
+## Runtime key memory
+
+The software identity key now uses pinned MemGuard guarded, locked buffers. Call
+`Client.Close()` when done. Signing needs a temporary Go-heap key copy, which is
+explicitly cleared; library internals and the base64 on-disk identity remain
+outside this guarantee. Encrypted MemGuard Enclaves are not used. The systemd
+unit sets `LimitCORE=0` and `LimitMEMLOCK=8M`. Lock failure refuses access; a
+dependency panic requires process restart after fixing resource limits. See the
+Secret Server `docs/MEMORY_PROTECTION.md` and deployment handoff for full limits.
